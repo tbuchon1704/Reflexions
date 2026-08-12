@@ -39,12 +39,13 @@ a{color:inherit;}
 .gap8{gap:8px;} .gap10{gap:10px;} .gap12{gap:12px;}
 .muted{color:var(--text-muted);}
 .small{font-size:12px;}
-.top-bar{position:fixed;top:calc(14px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);width:calc(100% - 32px);max-width:448px;display:flex;justify-content:flex-end;z-index:30;}
+.top-bar{position:fixed;top:calc(14px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);width:calc(100% - 32px);max-width:448px;display:flex;align-items:center;justify-content:space-between;gap:8px;z-index:30;}
 .round-btn{width:38px;height:38px;border-radius:50%;background:var(--surface);border:1px solid var(--border-strong);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--text-secondary);}
 
-.active-filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;}
-.active-filter-chip{display:flex;align-items:center;gap:6px;padding:6px 8px 6px 12px;border-radius:14px;background:var(--surface-2);border:1px solid var(--border-strong);font-size:13px;color:var(--text);}
-.active-filter-chip .x{color:var(--text-muted);display:flex;}
+.top-filters{display:flex;gap:6px;overflow-x:auto;flex:1;min-width:0;-ms-overflow-style:none;scrollbar-width:none;}
+.top-filters::-webkit-scrollbar{display:none;}
+.active-filter-chip{display:flex;align-items:center;gap:5px;padding:6px 7px 6px 11px;border-radius:13px;font-size:12.5px;font-weight:600;white-space:nowrap;flex-shrink:0;}
+.active-filter-chip .x{opacity:.8;display:flex;}
 
 .month-header{font-size:22px;font-weight:700;color:var(--text);margin:22px 4px 6px;}
 .month-header:first-child{margin-top:2px;}
@@ -377,6 +378,8 @@ async function extractPeaks(blob, samples=32){
 }
 
 /* ---------- GLOBAL AUDIO (only one plays at a time, stops on outside interaction) ---------- */
+let lastTouchAt=0;
+function isSyntheticMouse(e){ return !e.touches && (Date.now()-lastTouchAt)<700; }
 let currentAudio=null, currentAudioBtn=null;
 function stopCurrentAudio(){
   if(currentAudio){ currentAudio.pause(); }
@@ -428,16 +431,9 @@ async function renderHome(){
     stopCurrentAudio();
     const visible=filterNotes(allNotes);
     let html='';
-    if(state.categoryFilter.length){
-      html+=`<div class="active-filters">${state.categoryFilter.map(id=>{
-        const c=catById[id]; if(!c) return '';
-        return `<div class="active-filter-chip" data-remove-filter="${id}">${escapeHtml(c.name)}<span class="x">${icon('close',12)}</span></div>`;
-      }).join('')}</div>`;
-    }
     if(visible.length===0){
       html+=`<div class="empty"><p>Aucune note ici pour l\u2019instant.</p></div>`;
       listBody.innerHTML=html;
-      bindActiveFilterChips();
       return;
     }
     let lastGroup=null;
@@ -447,28 +443,35 @@ async function renderHome(){
       html+=noteRowHTML(n, catById[n.categoryId]);
     });
     listBody.innerHTML=html;
-    bindActiveFilterChips();
     bindNoteRowEvents(listBody, allNotes, cats, catById, refreshData);
   }
-  function bindActiveFilterChips(){
-    listBody.querySelectorAll('[data-remove-filter]').forEach(el=>{
-      el.addEventListener('click',()=>{
-        const id=el.dataset.removeFilter;
-        state.categoryFilter=state.categoryFilter.filter(x=>x!==id);
-        paintList();
-      });
-    });
-  }
   async function refreshData(){ renderHome(); }
-  paintList();
 
   document.querySelectorAll('.top-bar,.bottom-bar,.type-menu,.type-menu-backdrop').forEach(el=>el.remove());
 
   const topBar=document.createElement('div');
   topBar.className='top-bar';
-  topBar.innerHTML=`<button class="round-btn" id="open-filters">${icon('adjustments',17)}</button>`;
+  topBar.innerHTML=`<div class="top-filters" id="top-filters"></div><button class="round-btn" id="open-filters">${icon('adjustments',17)}</button>`;
   document.body.appendChild(topBar);
   document.getElementById('open-filters').onclick=()=>openFilterSheet(cats, refreshData);
+
+  const topFiltersEl=document.getElementById('top-filters');
+  function paintTopFilters(){
+    topFiltersEl.innerHTML=state.categoryFilter.map(id=>{
+      const c=catById[id]; if(!c) return '';
+      return `<div class="active-filter-chip" data-remove-filter="${id}" style="background:${c.tint};color:${c.accent};">${escapeHtml(c.name)}<span class="x">${icon('close',11)}</span></div>`;
+    }).join('');
+    topFiltersEl.querySelectorAll('[data-remove-filter]').forEach(el=>{
+      el.addEventListener('click',()=>{
+        const id=el.dataset.removeFilter;
+        state.categoryFilter=state.categoryFilter.filter(x=>x!==id);
+        paintTopFilters();
+        paintList();
+      });
+    });
+  }
+  paintTopFilters();
+  paintList();
 
   const bottomBar=document.createElement('div');
   bottomBar.className='bottom-bar';
@@ -770,6 +773,8 @@ function bindNoteRowEvents(container, allNotes, cats, catById, refresh){
     let pressTimer=null, startX=0, startY=0, moved=false, longFired=false, swiping=false, dx=0;
 
     const start=(e)=>{
+      if(e.touches) lastTouchAt=Date.now();
+      else if(isSyntheticMouse(e)) return;
       const pt=e.touches?e.touches[0]:e;
       startX=pt.clientX; startY=pt.clientY; moved=false; longFired=false; swiping=false; dx=0;
       pressTimer=setTimeout(()=>{
@@ -779,6 +784,8 @@ function bindNoteRowEvents(container, allNotes, cats, catById, refresh){
       },420);
     };
     const move=(e)=>{
+      if(e.touches) lastTouchAt=Date.now();
+      else if(isSyntheticMouse(e)) return;
       const pt=e.touches?e.touches[0]:e;
       dx=pt.clientX-startX; const dy=pt.clientY-startY;
       if(!swiping && Math.abs(dx)>14 && Math.abs(dx)>Math.abs(dy)*1.5){
@@ -791,7 +798,9 @@ function bindNoteRowEvents(container, allNotes, cats, catById, refresh){
         moved=true; clearTimeout(pressTimer);
       }
     };
-    const end=async ()=>{
+    const end=async (e)=>{
+      if(e && e.changedTouches) lastTouchAt=Date.now();
+      else if(e && isSyntheticMouse(e)) return;
       clearTimeout(pressTimer);
       if(swiping){
         head.style.transition='transform .2s ease';

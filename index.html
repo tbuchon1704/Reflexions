@@ -232,8 +232,10 @@ const TYPE_MENU=[
 
 /* ---------- DATA / INDEXEDDB ---------- */
 const DB_NAME='reflexions-db', DB_VERSION=2;
+let _dbPromise=null;
 function openDB(){
-  return new Promise((resolve,reject)=>{
+  if(_dbPromise) return _dbPromise;
+  _dbPromise=new Promise((resolve,reject)=>{
     const req=indexedDB.open(DB_NAME,DB_VERSION);
     req.onupgradeneeded=(e)=>{
       const db=e.target.result;
@@ -243,9 +245,15 @@ function openDB(){
         ns.createIndex('categoryId','categoryId');
       }
     };
-    req.onsuccess=()=>resolve(req.result);
-    req.onerror=()=>reject(req.error);
+    req.onsuccess=()=>{
+      const db=req.result;
+      db.onclose=()=>{ _dbPromise=null; };
+      db.onversionchange=()=>{ db.close(); _dbPromise=null; };
+      resolve(db);
+    };
+    req.onerror=()=>{ _dbPromise=null; reject(req.error); };
   });
+  return _dbPromise;
 }
 async function dbAll(store){ const db=await openDB(); return new Promise((res,rej)=>{ const t=db.transaction(store,'readonly'); const r=t.objectStore(store).getAll(); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error);}); }
 async function dbGet(store,id){ const db=await openDB(); return new Promise((res,rej)=>{ const t=db.transaction(store,'readonly'); const r=t.objectStore(store).get(id); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error);}); }
@@ -377,7 +385,7 @@ async function extractPeaks(blob, samples=32){
   }
 }
 
-/* ---------- GLOBAL AUDIO (only one plays at a time, stops on outside interaction) ---------- */
+/* ---------- GLOBAL AUDIO (only one plays at a time) ---------- */
 let lastTouchAt=0;
 function isSyntheticMouse(e){ return !e.touches && (Date.now()-lastTouchAt)<700; }
 let currentAudio=null, currentAudioBtn=null;
@@ -386,14 +394,9 @@ function stopCurrentAudio(){
   if(currentAudioBtn){ currentAudioBtn.innerHTML=icon('play',11); }
   currentAudio=null; currentAudioBtn=null;
 }
-document.addEventListener('click',(e)=>{
-  if(currentAudio && !currentAudio.paused && currentAudioBtn && !currentAudioBtn.contains(e.target)){
-    stopCurrentAudio();
-  }
-},true);
 
 /* ---------- APP STATE ---------- */
-const state={ categoryFilter:[], searchQuery:'', expandedIds:new Set(), showTranscript:new Set() };
+const state={ categoryFilter:[], searchQuery:'', expandedId:null, showTranscript:new Set() };
 
 window.addEventListener('DOMContentLoaded', async ()=>{
   await ensureSeed();
@@ -656,7 +659,7 @@ function expandedContentHTML(note){
 }
 function noteRowHTML(note, cat){
   const hasThumb=(note.photos||[]).length>0;
-  const isOpen=state.expandedIds.has(note.id);
+  const isOpen=state.expandedId===note.id;
   const tIcon=typeIconFor(note);
   return `
   <div class="note-row" data-note="${note.id}">
@@ -817,15 +820,24 @@ function bindNoteRowEvents(container, allNotes, cats, catById, refresh){
         return;
       }
       if(!moved && !longFired){
-        stopCurrentAudio();
         const note=allNotes.find(n=>n.id===id);
-        const isOpen=state.expandedIds.has(id);
+        const isOpen=state.expandedId===id;
         if(isOpen){
-          state.expandedIds.delete(id);
+          stopCurrentAudio();
+          state.expandedId=null;
           expandEl.style.maxHeight=expandEl.scrollHeight+'px';
           requestAnimationFrame(()=>{ expandEl.style.maxHeight='0px'; });
         } else {
-          state.expandedIds.add(id);
+          if(state.expandedId){
+            stopCurrentAudio();
+            const prevRow=container.querySelector(`.note-row[data-note="${state.expandedId}"]`);
+            const prevExpand=prevRow?prevRow.querySelector('[data-expand]'):null;
+            if(prevExpand){
+              prevExpand.style.maxHeight=prevExpand.scrollHeight+'px';
+              requestAnimationFrame(()=>{ prevExpand.style.maxHeight='0px'; });
+            }
+          }
+          state.expandedId=id;
           expandEl.innerHTML=expandedContentHTML(note);
           fillThumbs(expandEl); bindPlayButtons(expandEl); bindTranscriptToggles(expandEl);
           expandEl.style.maxHeight='0px';

@@ -260,6 +260,21 @@ async function dbGet(store,id){ const db=await openDB(); return new Promise((res
 async function dbPut(store,val){ const db=await openDB(); return new Promise((res,rej)=>{ const t=db.transaction(store,'readwrite'); t.objectStore(store).put(val); t.oncomplete=()=>res(val); t.onerror=()=>rej(t.error);}); }
 async function dbDelete(store,id){ const db=await openDB(); return new Promise((res,rej)=>{ const t=db.transaction(store,'readwrite'); t.objectStore(store).delete(id); t.oncomplete=()=>res(); t.onerror=()=>rej(t.error);}); }
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
+/* Media is always persisted as ArrayBuffer + mimeType (never a raw Blob object).
+   Safari/WebKit has a known bug where a Blob's type (and sometimes its content)
+   gets corrupted after being read back out of IndexedDB and written again —
+   this is what was breaking voice playback and turning photos/videos "offline"
+   after an unrelated edit (title, category, etc). ArrayBuffers don't have that
+   problem, so we convert at the boundary and rebuild a fresh Blob on demand. */
+async function toStoredMedia(blob){
+  return { arrayBuffer: await blob.arrayBuffer(), mimeType: blob.type };
+}
+function mediaBlobOf(item){
+  if(!item) return null;
+  if(item.arrayBuffer) return new Blob([item.arrayBuffer], {type:item.mimeType||''});
+  if(item.blob instanceof Blob) return new Blob([item.blob], {type:item.mimeType||item.blob.type||''});
+  return null;
+}
 
 const DEFAULT_CATEGORIES=[
   {id:'citations',name:'Citations',icon:'quote',tint:'#3A3560',accent:'#9B93FF'},
@@ -542,7 +557,8 @@ function quickCapturePhoto(kind, onSaved){
   input.addEventListener('change', async ()=>{
     const files=Array.from(input.files||[]);
     if(!files.length) return;
-    const note={id:uid(), body:'', voices:[], photos:files.map(f=>({id:uid(),blob:f,mimeType:f.type})), links:[], categoryId:null, favorite:false, deleted:false, createdAt:new Date().toISOString()};
+    const photos=await Promise.all(files.map(async f=>({id:uid(), ...(await toStoredMedia(f))})));
+    const note={id:uid(), body:'', voices:[], photos, links:[], categoryId:null, favorite:false, deleted:false, createdAt:new Date().toISOString()};
     await dbPut('notes',note); showToast('Note enregistrée'); onSaved();
   });
   input.click();
@@ -594,7 +610,8 @@ function quickCaptureVoice(onSaved){
     mediaRecorder.onstop=async ()=>{
       const blob=new Blob(chunks,{type: usedMime || 'audio/webm'});
       const peaks=await extractPeaks(blob);
-      const note={id:uid(), body:'', voices:[{id:uid(), blob, mimeType:blob.type, duration: Math.floor(durSec/60)+':'+(durSec%60).toString().padStart(2,'0'), transcript:'', peaks}], photos:[], links:[], categoryId:null, favorite:false, deleted:false, createdAt:new Date().toISOString()};
+      const stored=await toStoredMedia(blob);
+      const note={id:uid(), body:'', voices:[{id:uid(), ...stored, duration: Math.floor(durSec/60)+':'+(durSec%60).toString().padStart(2,'0'), transcript:'', peaks}], photos:[], links:[], categoryId:null, favorite:false, deleted:false, createdAt:new Date().toISOString()};
       await dbPut('notes',note);
       if(stream) stream.getTracks().forEach(t=>t.stop());
       if(audioCtx) audioCtx.close();
@@ -685,8 +702,9 @@ function fillOneMedia(el, isThumb, notesById){
   try{
     const note=notesById[noteId];
     const p=note && note.photos[idx];
-    if(!p || !(p.blob instanceof Blob)) throw new Error('missing blob');
-    const url=URL.createObjectURL(p.blob);
+    const blob=mediaBlobOf(p);
+    if(!blob) throw new Error('missing blob');
+    const url=URL.createObjectURL(blob);
     if((p.mimeType||'').startsWith('video')) el.innerHTML=`<video src="${url}" ${isThumb?'muted playsinline':'controls playsinline'}></video>`;
     else el.innerHTML=`<img src="${url}" alt="">`;
   }catch(e){
@@ -705,12 +723,13 @@ function bindPlayButtons(container, notesById){
       const [noteId,idx]=el.dataset.play.split(':');
       const note=notesById[noteId];
       const v=note && note.voices[idx];
-      if(!v || !(v.blob instanceof Blob)){ showToast('Média indisponible'); return; }
+      const vBlob=mediaBlobOf(v);
+      if(!vBlob){ showToast('Média indisponible'); return; }
       const waveEl=container.querySelector(`[data-wave="${noteId}:${idx}"]`);
       const bars=waveEl?waveEl.querySelectorAll('span'):[];
       let audio=el._audio;
       if(!audio){
-        audio=new Audio(URL.createObjectURL(v.blob));
+        audio=new Audio(URL.createObjectURL(vBlob));
         el._audio=audio;
         audio.addEventListener('timeupdate',()=>{
           if(!audio.duration) return;
@@ -1160,7 +1179,11 @@ async function openComposer(noteId, cats, onSaved, isEdit){
   };
   const filePhoto=ov.querySelector('#cmp-file-photo');
   ov.querySelector('#tool-photo').onclick=()=>filePhoto.click();
-  filePhoto.addEventListener('change',(e)=>{ Array.from(e.target.files).forEach(file=>draft.photos.push({id:uid(), blob:file, mimeType:file.type})); renderChips(); });
+  filePhoto.addEventListener('change',async (e)=>{
+    const files=Array.from(e.target.files);
+    for(const file of files){ draft.photos.push({id:uid(), ...(await toStoredMedia(file))}); }
+    renderChips();
+  });
 
   const micBtn=ov.querySelector('#tool-mic');
   let recording=false, mediaRecorder=null, chunks=[], audioCtx=null, analyser=null, rafId=null, recStart=0, stream=null, speechRec=null, liveTranscript='';
@@ -1198,7 +1221,8 @@ async function openComposer(noteId, cats, onSaved, isEdit){
     mediaRecorder.onstop=async ()=>{
       const blob=new Blob(chunks,{type: usedMime || 'audio/webm'});
       const peaks=await extractPeaks(blob);
-      draft.voices.push({id:uid(), blob, mimeType:blob.type, duration: Math.floor(durSec/60)+':'+(durSec%60).toString().padStart(2,'0'), transcript: liveTranscript.trim(), peaks});
+      const stored=await toStoredMedia(blob);
+      draft.voices.push({id:uid(), ...stored, duration: Math.floor(durSec/60)+':'+(durSec%60).toString().padStart(2,'0'), transcript: liveTranscript.trim(), peaks});
       renderChips();
     };
     mediaRecorder.stop();

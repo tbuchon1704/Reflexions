@@ -679,12 +679,12 @@ function noteRowHTML(note, cat){
     <div class="note-row-expand" data-expand="${note.id}">${isOpen?expandedContentHTML(note):''}</div>
   </div>`;
 }
-async function fillOneMedia(el, isThumb){
+function fillOneMedia(el, isThumb, notesById){
   const attr = isThumb ? el.dataset.mediaThumb : el.dataset.media;
   const [noteId,idx]=attr.split(':');
   try{
-    const note=await dbGet('notes',noteId);
-    const p=note.photos[idx];
+    const note=notesById[noteId];
+    const p=note && note.photos[idx];
     if(!p || !(p.blob instanceof Blob)) throw new Error('missing blob');
     const url=URL.createObjectURL(p.blob);
     if((p.mimeType||'').startsWith('video')) el.innerHTML=`<video src="${url}" ${isThumb?'muted playsinline':'controls playsinline'}></video>`;
@@ -693,18 +693,18 @@ async function fillOneMedia(el, isThumb){
     el.innerHTML=`<div class="media-broken">Média indisponible</div>`;
   }
 }
-function fillThumbs(container){
-  container.querySelectorAll('[data-media-thumb]').forEach(el=>fillOneMedia(el,true));
-  container.querySelectorAll('[data-media]').forEach(el=>fillOneMedia(el,false));
+function fillThumbs(container, notesById){
+  container.querySelectorAll('[data-media-thumb]').forEach(el=>fillOneMedia(el,true,notesById));
+  container.querySelectorAll('[data-media]').forEach(el=>fillOneMedia(el,false,notesById));
 }
-function bindPlayButtons(container){
+function bindPlayButtons(container, notesById){
   container.querySelectorAll('[data-play]').forEach(el=>{
     if(el._bound) return; el._bound=true;
-    el.addEventListener('click',async (e)=>{
+    el.addEventListener('click',(e)=>{
       e.stopPropagation();
       const [noteId,idx]=el.dataset.play.split(':');
-      const note=await dbGet('notes',noteId);
-      const v=note.voices[idx];
+      const note=notesById[noteId];
+      const v=note && note.voices[idx];
       if(!v || !(v.blob instanceof Blob)){ showToast('Média indisponible'); return; }
       const waveEl=container.querySelector(`[data-wave="${noteId}:${idx}"]`);
       const bars=waveEl?waveEl.querySelectorAll('span'):[];
@@ -721,7 +721,8 @@ function bindPlayButtons(container){
       }
       if(audio.paused){
         stopCurrentAudio();
-        audio.play(); el.innerHTML=icon('pause',11);
+        audio.play().catch(()=>{ showToast('Lecture impossible'); });
+        el.innerHTML=icon('pause',11);
         currentAudio=audio; currentAudioBtn=el;
       } else {
         audio.pause(); el.innerHTML=icon('play',11);
@@ -732,8 +733,9 @@ function bindPlayButtons(container){
 }
 
 function bindNoteRowEvents(container, allNotes, cats, catById, refresh){
-  fillThumbs(container);
-  bindPlayButtons(container);
+  const notesById={}; allNotes.forEach(n=>notesById[n.id]=n);
+  fillThumbs(container, notesById);
+  bindPlayButtons(container, notesById);
   container.querySelectorAll('[data-transcript-toggle]').forEach(el=>{
     el.addEventListener('click',(e)=>{
       e.stopPropagation();
@@ -745,7 +747,7 @@ function bindNoteRowEvents(container, allNotes, cats, catById, refresh){
       if(row && note){
         const expandEl=row.querySelector('[data-expand]');
         expandEl.innerHTML=expandedContentHTML(note);
-        fillThumbs(expandEl); bindPlayButtons(expandEl); bindTranscriptToggles(expandEl);
+        fillThumbs(expandEl, notesById); bindPlayButtons(expandEl, notesById); bindTranscriptToggles(expandEl);
         expandEl.style.maxHeight=expandEl.scrollHeight+'px';
       }
     });
@@ -762,7 +764,7 @@ function bindNoteRowEvents(container, allNotes, cats, catById, refresh){
         const note=allNotes.find(n=>n.id===noteId);
         const expandEl=row.querySelector('[data-expand]');
         expandEl.innerHTML=expandedContentHTML(note);
-        fillThumbs(expandEl); bindPlayButtons(expandEl); bindTranscriptToggles(expandEl);
+        fillThumbs(expandEl, notesById); bindPlayButtons(expandEl, notesById); bindTranscriptToggles(expandEl);
         expandEl.style.maxHeight=expandEl.scrollHeight+'px';
       });
     });
@@ -839,7 +841,7 @@ function bindNoteRowEvents(container, allNotes, cats, catById, refresh){
           }
           state.expandedId=id;
           expandEl.innerHTML=expandedContentHTML(note);
-          fillThumbs(expandEl); bindPlayButtons(expandEl); bindTranscriptToggles(expandEl);
+          fillThumbs(expandEl, notesById); bindPlayButtons(expandEl, notesById); bindTranscriptToggles(expandEl);
           expandEl.style.maxHeight='0px';
           requestAnimationFrame(()=>{ expandEl.style.maxHeight=expandEl.scrollHeight+'px'; });
         }

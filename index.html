@@ -50,7 +50,6 @@ a{color:inherit;}
 .month-header{font-size:22px;font-weight:700;color:var(--text);margin:22px 4px 6px;}
 .month-header:first-child{margin-top:2px;}
 .note-row{position:relative;overflow:hidden;}
-.note-row-swipe-bg{position:absolute;inset:0;display:flex;align-items:center;padding-left:14px;color:var(--text);background:var(--surface-3);opacity:0;border-radius:10px;}
 .note-row-head{display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid var(--border);background:var(--bg);position:relative;touch-action:pan-y;}
 .note-row-main{flex:1;min-width:0;}
 .note-row-title-line{display:flex;align-items:center;gap:5px;}
@@ -680,7 +679,6 @@ function noteRowHTML(note, cat){
   const tIcon=typeIconFor(note);
   return `
   <div class="note-row" data-note="${note.id}">
-    <div class="note-row-swipe-bg" data-swipe-bg="${note.id}">${icon('pin',18)}</div>
     <div class="note-row-head" data-toggle="${note.id}">
       ${note.favorite?`<span class="pin-mark">${icon('pin',14)}</span>`:''}
       ${cat?`<span class="cat-dot" style="background:${cat.accent}"></span>`:''}
@@ -793,14 +791,13 @@ function bindNoteRowEvents(container, allNotes, cats, catById, refresh){
     const row=head.closest('.note-row');
     const id=row.dataset.note;
     const expandEl=row.querySelector('[data-expand]');
-    const swipeBg=row.querySelector('[data-swipe-bg]');
-    let pressTimer=null, startX=0, startY=0, moved=false, longFired=false, swiping=false, dx=0;
+    let pressTimer=null, startX=0, startY=0, moved=false, longFired=false;
 
     const start=(e)=>{
       if(e.touches) lastTouchAt=Date.now();
       else if(isSyntheticMouse(e)) return;
       const pt=e.touches?e.touches[0]:e;
-      startX=pt.clientX; startY=pt.clientY; moved=false; longFired=false; swiping=false; dx=0;
+      startX=pt.clientX; startY=pt.clientY; moved=false; longFired=false;
       pressTimer=setTimeout(()=>{
         longFired=true;
         navigator.vibrate && navigator.vibrate(15);
@@ -811,14 +808,8 @@ function bindNoteRowEvents(container, allNotes, cats, catById, refresh){
       if(e.touches) lastTouchAt=Date.now();
       else if(isSyntheticMouse(e)) return;
       const pt=e.touches?e.touches[0]:e;
-      dx=pt.clientX-startX; const dy=pt.clientY-startY;
-      if(!swiping && Math.abs(dx)>14 && Math.abs(dx)>Math.abs(dy)*1.5){
-        swiping=true; clearTimeout(pressTimer);
-      }
-      if(swiping && dx>0){
-        head.style.transform=`translateX(${Math.min(dx,90)}px)`;
-        if(swipeBg) swipeBg.style.opacity=Math.min(dx/90,1);
-      } else if(Math.abs(dx)>10 || Math.abs(dy)>10){
+      const dx=pt.clientX-startX, dy=pt.clientY-startY;
+      if(Math.abs(dx)>10 || Math.abs(dy)>10){
         moved=true; clearTimeout(pressTimer);
       }
     };
@@ -826,20 +817,6 @@ function bindNoteRowEvents(container, allNotes, cats, catById, refresh){
       if(e && e.changedTouches) lastTouchAt=Date.now();
       else if(e && isSyntheticMouse(e)) return;
       clearTimeout(pressTimer);
-      if(swiping){
-        head.style.transition='transform .2s ease';
-        head.style.transform='translateX(0)';
-        if(swipeBg){ swipeBg.style.transition='opacity .2s ease'; swipeBg.style.opacity='0'; }
-        setTimeout(()=>{ head.style.transition=''; if(swipeBg) swipeBg.style.transition=''; },220);
-        if(dx>70){
-          const note=await dbGet('notes',id);
-          note.favorite=!note.favorite;
-          await dbPut('notes',note);
-          showToast(note.favorite?'Note épinglée':'Note désépinglée');
-          refresh();
-        }
-        return;
-      }
       if(!moved && !longFired){
         const note=allNotes.find(n=>n.id===id);
         const isOpen=state.expandedId===id;
